@@ -203,13 +203,13 @@
   /* 巴の数を選ぶ列 */
   .snaprow {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(7, 1fr);
     gap: 6px;
     margin: 13px 0 9px;
   }
   .btnrow {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 8px;
   }
   button {
@@ -365,8 +365,10 @@
     <button data-n="5">五つ</button>
     <button data-n="6">六つ</button>
     <button data-n="8">八つ</button>
+    <button data-n="phi">黄金</button>
   </div>
   <div class="btnrow">
+    <button id="driftBtn" class="active">漂い</button>
     <button id="invertBtn">反転</button>
     <button id="resetBtn">リセット</button>
     <button id="artBtn">鑑賞モード</button>
@@ -374,7 +376,7 @@
 </div>
 
 <div id="artToast"></div>
-<div id="hint">回すと巴紋が現れる · 数字は1フレームあたりの回転角 · A で鑑賞モード</div>
+<div id="hint">回すと巴紋が現れる · 黄金 = 決して結晶しない黄金角回転 · A で鑑賞モード</div>
 
 <script>
 (() => {
@@ -389,6 +391,7 @@
     sweep: 170,       // 勾玉の巻き(度)
     thick: 0.30,      // 頭の太さ(半径比)
     pos: 0.36,        // 頭の中心距離(半径比)。小さいほど中心に寄る
+    drift: true,      // 紋をわずかに歳差回転させる(+0.05°/frame)
     sizeRatio: 0.70,
     inverted: false,
     dragging: false,
@@ -404,11 +407,24 @@
     5: { sweep: 98,  thick: 0.21, pos: 0.46 },
     6: { sweep: 78,  thick: 0.18, pos: 0.50 },
     8: { sweep: 56,  thick: 0.145, pos: 0.55 },
+    phi: { sweep: 150, thick: 0.24, pos: 0.40 },
   };
+
+  // 黄金角 360/φ² = 137.5077…° — もっとも「割り切れない」回転角。
+  // どのNにも結晶せず、勾玉の残像がひまわりの種の配置(フィロタキシス)で
+  // 円を満たしていく
+  const GOLDEN = 360 * (1 - 1 / 1.618033988749895);
+
+  function presetSpeed(key) {
+    if (key === 'phi') return GOLDEN;
+    // 「漂い」: 厳密な 360/N からわずかにずらし、結晶した紋を
+    // ゆっくり歳差回転させる(ちょうどだと凍りついて見える)
+    return 360 / key + (state.drift ? 0.05 : 0);
+  }
 
   // ---- 鑑賞モード ----
   // 巴紋が結晶する速度を順に巡り、そのたび紋が組み上がっては崩れる
-  const TOUR = [2, 3, 4, 5, 6, 8];
+  const TOUR = [2, 3, 4, 5, 6, 8, 'phi'];
   const art = {
     active: false,
     idx: 0,
@@ -457,16 +473,27 @@
   // ---- 勾玉(ひとつだけ)を用意する ----
   // 中心へ向かって細くなりながら巻きこむ円の並びを、ひとつの図形として塗る。
   // 半径を落としながら角度を進めるので、N枚重なっても互いの隙間へ入りこむ。
-  let commaCanvas = null, commaR = 0, commaDirty = true, lastBuild = 0;
+  let commaCanvas = null, glowCanvas = null, commaR = 0, commaDirty = true, lastBuild = 0;
+
+  function lerpColor(a, b, t) {
+    return 'rgb(' +
+      Math.round(a[0] + (b[0] - a[0]) * t) + ',' +
+      Math.round(a[1] + (b[1] - a[1]) * t) + ',' +
+      Math.round(a[2] + (b[2] - a[2]) * t) + ')';
+  }
 
   function buildComma(R) {
-    const pad = 3;
+    // グローのにじみが切れないよう、余白を広めに取る
+    const pad = Math.ceil(R * 0.09) + 4;
     const size = Math.ceil(R * 2 + pad * 2);
     const cv = document.createElement('canvas');
     cv.width = cv.height = size;
     const g = cv.getContext('2d');
     g.translate(size / 2, size / 2);
-    g.fillStyle = inkColor();
+
+    // 頭から尾へ沈んでいく色(通常: 金 / 反転: 墨)
+    const head = state.inverted ? [22, 20, 17] : [242, 216, 152];
+    const tail = state.inverted ? [58, 51, 40] : [140, 95, 34];
 
     // 伝統的な巴紋の構図:頭は中心近くに置き、尾は縁の内側に沿って
     // 外へ巻きつきながら先細る。外縁(頭の外側 → 縁ぎわ)をなめらかに
@@ -474,8 +501,8 @@
     const E_MAX = 0.94, W_TIP = 0.008, RAMP = 0.42;
     const eHead = state.pos + state.thick;
     const STEPS = 260;
-    g.beginPath();
-    for (let i = 0; i <= STEPS; i++) {
+    // 尾から描き、頭の明るい色を最後に載せる
+    for (let i = STEPS; i >= 0; i--) {
       const t = i / STEPS;
       const phi = (-90 + state.sweep * t) * Math.PI / 180;
       // 頭から尾へ向かって先細り
@@ -485,10 +512,22 @@
       const outer = eHead + (E_MAX - eHead) * u * u * (3 - 2 * u);
       const rho = R * (outer - w);
       const x = Math.cos(phi) * rho, y = Math.sin(phi) * rho;
-      g.moveTo(x + R * w, y);
+      g.fillStyle = lerpColor(head, tail, Math.pow(t, 0.85));
+      g.beginPath();
       g.arc(x, y, R * w, 0, Math.PI * 2);
+      g.fill();
     }
-    g.fill();
+    return cv;
+  }
+
+  // 勾玉のまわりに柔らかい光暈(ハロー)を焼き込む
+  function buildGlow(core, R) {
+    const cv = document.createElement('canvas');
+    cv.width = core.width;
+    cv.height = core.height;
+    const g = cv.getContext('2d');
+    g.filter = 'blur(' + Math.max(4, R * 0.045).toFixed(1) + 'px)';
+    g.drawImage(core, 0, 0);
     return cv;
   }
 
@@ -499,6 +538,7 @@
     if (!sizeChanged && now - lastBuild < 45) return;
     commaR = R;
     commaCanvas = buildComma(R);
+    glowCanvas = buildGlow(commaCanvas, R);
     commaDirty = false;
     lastBuild = now;
   }
@@ -506,11 +546,22 @@
   function drawComma(cx, cy, R, angleDeg, alpha, now) {
     ensureComma(R, now);
     ctx.save();
-    ctx.globalAlpha = alpha;
     ctx.translate(cx, cy);
     ctx.rotate(angleDeg * Math.PI / 180);
     const s = commaCanvas.width;
-    ctx.drawImage(commaCanvas, -s / 2, -s / 2);
+    if (!state.inverted) {
+      // 黒地では光として加算合成する。重なりは濁らず、明るくなる
+      ctx.globalCompositeOperation = 'lighter';
+      const a = Math.min(1, alpha * 1.35);
+      ctx.globalAlpha = a * 0.35;
+      ctx.drawImage(glowCanvas, -s / 2, -s / 2);
+      ctx.globalAlpha = a;
+      ctx.drawImage(commaCanvas, -s / 2, -s / 2);
+    } else {
+      // 紙地では墨としてふつうに重ねる
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(commaCanvas, -s / 2, -s / 2);
+    }
     ctx.restore();
   }
 
@@ -520,28 +571,28 @@
     ctx.save();
     ctx.beginPath();
     ctx.arc(cx, cy, rr, 0, Math.PI * 2);
-    ctx.strokeStyle = state.inverted ? 'rgba(0,0,0,0.16)' : 'rgba(255,255,255,0.13)';
+    ctx.strokeStyle = state.inverted ? 'rgba(0,0,0,0.16)' : 'rgba(201,168,106,0.30)';
     ctx.lineWidth = 1;
     ctx.stroke();
     ctx.restore();
   }
 
-  // ---- 見えている巴の数 ----
-  // v/360 を既約分数にしたときの分母が、重なって見える枚数になる
-  function gcd(a, b) { while (b) { const t = a % b; a = b; b = t; } return a; }
-  function tomoeCount(v) {
-    if (!isFinite(v)) return 0;
-    const n = Math.round(Math.abs(v) * 10);      // 0.1°刻み
-    if (n === 0) return 1;
-    const q = 3600 / gcd(n, 3600);
-    return q;
-  }
+  // ---- 見えている紋の名前 ----
+  // 360/N に十分近ければ N つ巴。「漂い」のずれ(+0.05)は許容内に収める
   const KANJI = ['', '一つ巴', '二つ巴', '三つ巴', '四つ巴', '五つ巴',
                  '六つ巴', '七つ巴', '八つ巴', '九つ巴'];
-  function tomoeName(q) {
-    if (q <= 9) return KANJI[q];
-    if (q <= 12) return q + 'つ巴';
-    return '';
+  function patternLabel(v) {
+    if (!isFinite(v)) return '';
+    const s = Math.abs(v);
+    if (s < 0.05) return '';
+    if (Math.abs(s - GOLDEN) < 0.3) return '黄金角 φ';
+    let best = 0, err = 0.3;
+    for (let n = 2; n <= 12; n++) {
+      const d = Math.abs(s - 360 / n);
+      if (d < err) { err = d; best = n; }
+    }
+    if (!best) return '';
+    return best <= 9 ? KANJI[best] : best + 'つ巴';
   }
 
   // ---- 鑑賞モードの進行 ----
@@ -549,7 +600,7 @@
     art.t += dt;
     const n = TOUR[art.idx];
     const p0 = PRESET[n];
-    const tv = art.dir * 360 / n;
+    const tv = art.dir * presetSpeed(n);
     if (art.phase === 'glide') {
       const p = Math.min(1, art.t / art.GLIDE);
       const e = p * p * (3 - 2 * p);            // なめらかに寄せて止める
@@ -628,8 +679,7 @@
   const patternName = document.getElementById('patternName');
   function updateReadout() {
     speedValue.textContent = state.velocity.toFixed(1);
-    const q = tomoeCount(state.velocity);
-    const name = Math.abs(state.velocity) < 0.05 ? '' : tomoeName(q);
+    const name = patternLabel(state.velocity);
     if (patternName.textContent !== name) patternName.textContent = name;
     patternName.classList.toggle('on', !!name);
   }
@@ -639,6 +689,7 @@
   const grip = document.getElementById('grip');
   const hint = document.getElementById('hint');
   const artToast = document.getElementById('artToast');
+  const driftBtn = document.getElementById('driftBtn');
   const invertBtn = document.getElementById('invertBtn');
   const resetBtn = document.getElementById('resetBtn');
   const artBtn = document.getElementById('artBtn');
@@ -658,8 +709,9 @@
     put($('thickSlider'), $('thickNum'), state.thick * 100);
     put($('sizeSlider'), $('sizeNum'), state.sizeRatio * 100);
     document.querySelectorAll('.snaprow button').forEach(b => {
-      const v = 360 / parseInt(b.dataset.n, 10);
-      b.classList.toggle('active', Math.abs(Math.abs(state.velocity) - v) < 0.05);
+      const key = b.dataset.n;
+      const v = key === 'phi' ? GOLDEN : 360 / parseInt(key, 10);
+      b.classList.toggle('active', Math.abs(Math.abs(state.velocity) - v) < 0.3);
     });
   }
 
@@ -688,10 +740,10 @@
   bindPair('sizeSlider', 'sizeNum', (v) => { state.sizeRatio = clamp(v, 0.2, 0.98); }, 100);
 
   // 巴の数を選ぶ。速度だけでなく、その数で紋が組める形にも合わせる
-  function applyTomoe(n) {
-    const p = PRESET[n];
+  function applyTomoe(key) {
+    const p = PRESET[key];
     const sign = state.velocity < 0 ? -1 : 1;
-    setVelocity(sign * 360 / n);
+    setVelocity(sign * presetSpeed(key));
     if (p) {
       state.sweep = p.sweep;
       state.thick = p.thick;
@@ -701,7 +753,31 @@
     syncControls();
   }
   document.querySelectorAll('.snaprow button').forEach(b => {
-    b.addEventListener('click', () => applyTomoe(parseInt(b.dataset.n, 10)));
+    b.addEventListener('click', () => {
+      applyTomoe(b.dataset.n === 'phi' ? 'phi' : parseInt(b.dataset.n, 10));
+    });
+  });
+
+  // いまの速度がどれかの紋に合っていれば、そのキーを返す
+  function matchedPreset() {
+    const s = Math.abs(state.velocity);
+    if (Math.abs(s - GOLDEN) < 0.3) return 'phi';
+    for (const k of [2, 3, 4, 5, 6, 8]) {
+      if (Math.abs(s - 360 / k) < 0.3) return k;
+    }
+    return null;
+  }
+
+  driftBtn.addEventListener('click', () => {
+    state.drift = !state.drift;
+    driftBtn.classList.toggle('active', state.drift);
+    // いま紋に合っているなら、新しい設定で速度を合わせ直す
+    const m = matchedPreset();
+    if (m && m !== 'phi') {
+      const sign = state.velocity < 0 ? -1 : 1;
+      setVelocity(sign * presetSpeed(m));
+      syncControls();
+    }
   });
 
   invertBtn.addEventListener('click', () => {
@@ -883,6 +959,8 @@
       panel.classList.toggle('hidden');
     } else if (e.key === 'a' || e.key === 'A') {
       enterArt();
+    } else if (e.key === 'g' || e.key === 'G') {
+      applyTomoe('phi');
     } else if (PRESET[e.key]) {
       applyTomoe(parseInt(e.key, 10));
     }
