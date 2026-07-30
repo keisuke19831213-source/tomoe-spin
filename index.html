@@ -345,8 +345,8 @@
   </div>
   <div class="row">
     <label>巻き °</label>
-    <input type="range" id="sweepSlider" min="40" max="280" step="1" value="168">
-    <input type="number" id="sweepNum" min="40" max="280" step="1" value="168">
+    <input type="range" id="sweepSlider" min="40" max="280" step="1" value="170">
+    <input type="number" id="sweepNum" min="40" max="280" step="1" value="170">
   </div>
   <div class="row">
     <label>太さ %</label>
@@ -386,8 +386,9 @@
     angle: 0,
     velocity: 0,      // 度/フレーム
     trail: 0.88,      // 高いほど各巴の明るさが揃う
-    sweep: 168,       // 勾玉の巻き(度)
+    sweep: 170,       // 勾玉の巻き(度)
     thick: 0.30,      // 頭の太さ(半径比)
+    pos: 0.36,        // 頭の中心距離(半径比)。小さいほど中心に寄る
     sizeRatio: 0.70,
     inverted: false,
     dragging: false,
@@ -397,12 +398,12 @@
   // 巴の数が増えるほど一つ分の取り分が狭くなるので、
   // 巻きを浅く・頭を細くしないと隣とぶつかって紋にならない
   const PRESET = {
-    2: { sweep: 250, thick: 0.34 },
-    3: { sweep: 168, thick: 0.30 },
-    4: { sweep: 124, thick: 0.26 },
-    5: { sweep: 96,  thick: 0.23 },
-    6: { sweep: 78,  thick: 0.21 },
-    8: { sweep: 58,  thick: 0.17 },
+    2: { sweep: 230, thick: 0.34, pos: 0.38 },
+    3: { sweep: 170, thick: 0.30, pos: 0.36 },
+    4: { sweep: 126, thick: 0.25, pos: 0.41 },
+    5: { sweep: 98,  thick: 0.21, pos: 0.46 },
+    6: { sweep: 78,  thick: 0.18, pos: 0.50 },
+    8: { sweep: 56,  thick: 0.145, pos: 0.55 },
   };
 
   // ---- 鑑賞モード ----
@@ -414,7 +415,7 @@
     phase: 'glide',
     t: 0,
     dir: 1,
-    from: { v: 0, sweep: 168, thick: 0.30 },
+    from: { v: 0, sweep: 170, thick: 0.30, pos: 0.36 },
     GLIDE: 5.5,
     HOLD: 9,
     SIZE: 0.9,
@@ -467,18 +468,25 @@
     g.translate(size / 2, size / 2);
     g.fillStyle = inkColor();
 
-    const RHO0 = 0.62, RHO_SPAN = 0.60, W_TIP = 0.008;
+    // 伝統的な巴紋の構図:頭は中心近くに置き、尾は縁の内側に沿って
+    // 外へ巻きつきながら先細る。外縁(頭の外側 → 縁ぎわ)をなめらかに
+    // 持ち上げ、path半径 = 外縁 − 太さ で決める。
+    const E_MAX = 0.94, W_TIP = 0.008, RAMP = 0.42;
+    const eHead = state.pos + state.thick;
     const STEPS = 260;
     g.beginPath();
     for (let i = 0; i <= STEPS; i++) {
       const t = i / STEPS;
       const phi = (-90 + state.sweep * t) * Math.PI / 180;
-      const rho = R * (RHO0 - RHO_SPAN * Math.pow(t, 1.12));
-      // 頭の円から、尾へ向かってはっきり先細りさせる
-      const w = R * (state.thick * Math.pow(1 - t, 1.45) + W_TIP);
+      // 頭から尾へ向かって先細り
+      const w = state.thick * Math.pow(1 - t, 1.4) + W_TIP;
+      // 外縁: 頭の高さから E_MAX へ滑らかに立ち上がり、以後は縁に沿う
+      const u = Math.min(1, t / RAMP);
+      const outer = eHead + (E_MAX - eHead) * u * u * (3 - 2 * u);
+      const rho = R * (outer - w);
       const x = Math.cos(phi) * rho, y = Math.sin(phi) * rho;
-      g.moveTo(x + w, y);
-      g.arc(x, y, w, 0, Math.PI * 2);
+      g.moveTo(x + R * w, y);
+      g.arc(x, y, R * w, 0, Math.PI * 2);
     }
     g.fill();
     return cv;
@@ -549,15 +557,19 @@
       // 速度と一緒に勾玉の形も変わっていく
       const sw = art.from.sweep + (p0.sweep - art.from.sweep) * e;
       const th = art.from.thick + (p0.thick - art.from.thick) * e;
-      if (Math.abs(sw - state.sweep) > 0.3 || Math.abs(th - state.thick) > 0.002) {
+      const ps = art.from.pos + (p0.pos - art.from.pos) * e;
+      if (Math.abs(sw - state.sweep) > 0.3 || Math.abs(th - state.thick) > 0.002 ||
+          Math.abs(ps - state.pos) > 0.002) {
         state.sweep = sw;
         state.thick = th;
+        state.pos = ps;
         commaDirty = true;
       }
       if (p >= 1) {
         state.velocity = tv;
         state.sweep = p0.sweep;
         state.thick = p0.thick;
+        state.pos = p0.pos;
         commaDirty = true;
         art.phase = 'hold';
         art.t = 0;
@@ -565,7 +577,7 @@
     } else {
       state.velocity = tv;
       if (art.t >= art.HOLD) {
-        art.from = { v: state.velocity, sweep: state.sweep, thick: state.thick };
+        art.from = { v: state.velocity, sweep: state.sweep, thick: state.thick, pos: state.pos };
         art.idx++;
         if (art.idx >= TOUR.length) { art.idx = 0; art.dir *= -1; }
         art.phase = 'glide';
@@ -683,6 +695,7 @@
     if (p) {
       state.sweep = p.sweep;
       state.thick = p.thick;
+      state.pos = p.pos;
       commaDirty = true;
     }
     syncControls();
@@ -795,7 +808,7 @@
     art.phase = 'glide';
     art.t = 0;
     art.dir = 1;
-    art.from = { v: state.velocity, sweep: state.sweep, thick: state.thick };
+    art.from = { v: state.velocity, sweep: state.sweep, thick: state.thick, pos: state.pos };
     document.body.classList.add('art');
     artBtn.classList.add('active');
     showToast(touchDevice ? 'タップで終了' : 'クリックまたはキーで終了');
