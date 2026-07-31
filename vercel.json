@@ -1,0 +1,9 @@
+{
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "destination": "https://art.mqri.or.jp/works/tomoe-spin/",
+      "permanent": true
+    }
+  ]
+}
